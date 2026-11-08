@@ -1,0 +1,997 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cyber Quest: ภารกิจกู้ภัยเมืองดิจิทัล</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React & ReactDOM -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <!-- Babel standalone for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Google Fonts: Prompt -->
+    <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Prompt', sans-serif; }
+        .glass-card {
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        @keyframes pulse-slow {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.05); opacity: 0.9; }
+        }
+        .animate-pulse-slow { animation: pulse-slow 3s infinite ease-in-out; }
+    </style>
+</head>
+<body class="bg-slate-950 text-white min-h-screen selection:bg-cyan-500 selection:text-white">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // --- Web Audio API Sound Synthesizer ---
+        class SoundFX {
+            static play(type) {
+                try {
+                    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                    const osc = ctx.createOscillator();
+                    const gain = ctx.createGain();
+                    osc.connect(gain);
+                    gain.connect(ctx.destination);
+
+                    const now = ctx.currentTime;
+                    if (type === 'click') {
+                        osc.frequency.setValueAtTime(400, now);
+                        osc.frequency.exponentialRampToValueAtTime(800, now + 0.05);
+                        gain.gain.setValueAtTime(0.1, now);
+                        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.05);
+                        osc.start(now);
+                        osc.stop(now + 0.05);
+                    } else if (type === 'correct') {
+                        osc.frequency.setValueAtTime(523.25, now);
+                        osc.frequency.setValueAtTime(659.25, now + 0.08);
+                        osc.frequency.setValueAtTime(783.99, now + 0.16);
+                        gain.gain.setValueAtTime(0.15, now);
+                        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
+                        osc.start(now);
+                        osc.stop(now + 0.3);
+                    } else if (type === 'wrong') {
+                        osc.type = 'sawtooth';
+                        osc.frequency.setValueAtTime(220, now);
+                        osc.frequency.setValueAtTime(110, now + 0.15);
+                        gain.gain.setValueAtTime(0.2, now);
+                        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
+                        osc.start(now);
+                        osc.stop(now + 0.3);
+                    } else if (type === 'win') {
+                        const notes = [523.25, 659.25, 783.99, 1046.50];
+                        notes.forEach((freq, idx) => {
+                            const o = ctx.createOscillator();
+                            const g = ctx.createGain();
+                            o.connect(g);
+                            g.connect(ctx.destination);
+                            o.frequency.setValueAtTime(freq, now + idx * 0.1);
+                            g.gain.setValueAtTime(0.15, now + idx * 0.1);
+                            g.gain.exponentialRampToValueAtTime(0.01, now + idx * 0.1 + 0.2);
+                            o.start(now + idx * 0.1);
+                            o.stop(now + idx * 0.1 + 0.2);
+                        });
+                    }
+                } catch(e) { console.log('Audio error:', e); }
+            }
+        }
+
+        // --- Sample Initial Database ---
+        const INITIAL_SCORES = [
+            { id: "STD-6701", name: "สมชาย ไซเบอร์", room: "CS-101", nickname: "CyberKing", score: 950, fullScore: 1000, percent: 95, correct: 14, wrong: 1, timeSec: 145, medal: "🥇 ผู้เชี่ยวชาญไซเบอร์", status: "สำเร็จ", date: "2026-11-08 14:20" },
+            { id: "STD-6702", name: "กัญญา ป้องกันดี", room: "CS-101", nickname: "ShieldGirl", score: 880, fullScore: 1000, percent: 88, correct: 13, wrong: 2, timeSec: 172, medal: "🥈 นักแก้ปัญหา", status: "สำเร็จ", date: "2026-11-08 15:10" },
+            { id: "STD-6703", name: "วิชัย สายสืบ", room: "CS-102", nickname: "DetectiveV", score: 720, fullScore: 1000, percent: 72, correct: 10, wrong: 5, timeSec: 210, medal: "🥉 ผู้เริ่มต้นไซเบอร์", status: "สำเร็จ", date: "2026-11-08 16:05" }
+        ];
+
+        // --- Main CyberQuest App ---
+        function CyberQuestApp() {
+            const [screen, setScreen] = useState('START'); // START, REGISTER, HOWTO, GAME, SUMMARY, DASHBOARD
+            const [player, setPlayer] = useState({ name: '', studentId: '', classGroup: '', nickname: '' });
+            const [stage, setStage] = useState(1);
+            const [lives, setLives] = useState(3);
+            const [score, setScore] = useState(0);
+            const [items, setItems] = useState({ shield: 1, hint: 2 });
+            const [totalCorrect, setTotalCorrect] = useState(0);
+            const [totalWrong, setTotalWrong] = useState(0);
+            const [startTime, setStartTime] = useState(null);
+            const [endTime, setEndTime] = useState(null);
+            const [dbRecords, setDbRecords] = useState(() => {
+                const saved = localStorage.getItem('cyber_quest_scores');
+                return saved ? JSON.parse(saved) : INITIAL_SCORES;
+            });
+            const [feedback, setFeedback] = useState(null);
+
+            // Save records to LocalStorage
+            useEffect(() => {
+                localStorage.setItem('cyber_quest_scores', JSON.stringify(dbRecords));
+            }, [dbRecords]);
+
+            const handleStartClick = () => {
+                SoundFX.play('click');
+                setScreen('REGISTER');
+            };
+
+            const handleRegisterSubmit = (e) => {
+                e.preventDefault();
+                if (!player.name || !player.studentId || !player.classGroup || !player.nickname) {
+                    alert('กรุณากรอกข้อมูลให้ครบถ้วนทุกช่องครับ');
+                    return;
+                }
+                SoundFX.play('click');
+                setScreen('HOWTO');
+            };
+
+            const startGameplay = () => {
+                SoundFX.play('click');
+                setStage(1);
+                setLives(3);
+                setScore(0);
+                setTotalCorrect(0);
+                setTotalWrong(0);
+                setItems({ shield: 1, hint: 2 });
+                setStartTime(Date.now());
+                setScreen('GAME');
+            };
+
+            const completeGame = (finalScore, extraCorrect = 0, extraWrong = 0) => {
+                const now = Date.now();
+                setEndTime(now);
+                const finalCorrect = totalCorrect + extraCorrect;
+                const finalWrong = totalWrong + extraWrong;
+                const totalQuestions = 15;
+                const percentVal = Math.min(100, Math.round((finalScore / 1000) * 100));
+                const elapsedSec = Math.round((now - (startTime || now)) / 1000);
+
+                let medalVal = "🥉 ผู้เริ่มต้นไซเบอร์";
+                if (percentVal >= 85) medalVal = "🥇 ผู้เชี่ยวชาญไซเบอร์";
+                else if (percentVal >= 65) medalVal = "🥈 นักแก้ปัญหา";
+
+                const newRecord = {
+                    id: player.studentId,
+                    name: player.name,
+                    room: player.classGroup,
+                    nickname: player.nickname,
+                    score: finalScore,
+                    fullScore: 1000,
+                    percent: percentVal,
+                    correct: finalCorrect,
+                    wrong: finalWrong,
+                    timeSec: elapsedSec,
+                    medal: medalVal,
+                    status: lives > 0 ? "สำเร็จ" : "ล้มเหลว",
+                    date: new Date().toLocaleString('th-TH')
+                };
+
+                setDbRecords(prev => [newRecord, ...prev]);
+                setScreen('SUMMARY');
+                SoundFX.play('win');
+            };
+
+            return (
+                <div className="max-w-4xl mx-auto p-4 min-h-screen flex flex-col justify-between">
+                    {/* Header bar */}
+                    <header className="flex justify-between items-center py-4 border-b border-slate-800">
+                        <div className="flex items-center space-x-2 cursor-pointer" onClick={() => setScreen('START')}>
+                            <span className="text-3xl">🛡️</span>
+                            <div>
+                                <h1 className="text-xl font-bold bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent">Cyber Quest</h1>
+                                <p className="text-xs text-slate-400">ภารกิจกู้ภัยเมืองดิจิทัล</p>
+                            </div>
+                        </div>
+                        <div className="flex space-x-2">
+                            <button 
+                                onClick={() => { SoundFX.play('click'); setScreen('DASHBOARD'); }}
+                                className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-cyan-400 border border-cyan-500/30 transition">
+                                📊 Dashboard ผู้เรียน
+                            </button>
+                        </div>
+                    </header>
+
+                    {/* Main Dynamic View */}
+                    <main className="my-6 flex-grow flex flex-col justify-center">
+                        {screen === 'START' && <StartScreen onStart={handleStartClick} onHowTo={() => { SoundFX.play('click'); setScreen('HOWTO'); }} />}
+                        {screen === 'REGISTER' && <RegisterScreen player={player} setPlayer={setPlayer} onSubmit={handleRegisterSubmit} />}
+                        {screen === 'HOWTO' && <HowToScreen onBegin={startGameplay} player={player} />}
+                        {screen === 'GAME' && (
+                            <GameEngine 
+                                stage={stage} setStage={setStage}
+                                lives={lives} setLives={setLives}
+                                score={score} setScore={setScore}
+                                items={items} setItems={setItems}
+                                totalCorrect={totalCorrect} setTotalCorrect={setTotalCorrect}
+                                totalWrong={totalWrong} setTotalWrong={setTotalWrong}
+                                onComplete={completeGame}
+                                feedback={feedback} setFeedback={setFeedback}
+                            />
+                        )}
+                        {screen === 'SUMMARY' && (
+                            <SummaryScreen 
+                                player={player} score={score} lives={lives}
+                                startTime={startTime} endTime={endTime}
+                                totalCorrect={totalCorrect} totalWrong={totalWrong}
+                                onRestart={startGameplay} onDashboard={() => setScreen('DASHBOARD')}
+                            />
+                        )}
+                        {screen === 'DASHBOARD' && <DashboardScreen records={dbRecords} onBack={() => setScreen('START')} />}
+                    </main>
+
+                    {/* Footer */}
+                    <footer className="py-4 text-center text-xs text-slate-500 border-t border-slate-900">
+                        เกมการสอนทบทวนเนื้อหา ความปลอดภัยไซเบอร์ (Cyber Security) &copy; 2026
+                    </footer>
+                </div>
+            );
+        }
+
+        // --- 1. Screen: Start ---
+        function StartScreen({ onStart, onHowTo }) {
+            return (
+                <div className="glass-card p-8 rounded-2xl text-center shadow-2xl relative overflow-hidden">
+                    <div className="absolute -top-20 -left-20 w-48 h-48 bg-cyan-500/10 rounded-full blur-3xl"></div>
+                    <div className="absolute -bottom-20 -right-20 w-48 h-48 bg-blue-500/10 rounded-full blur-3xl"></div>
+
+                    <div className="text-7xl mb-4 animate-pulse-slow">🏰🔒</div>
+                    <h2 className="text-3xl font-extrabold text-white mb-2">Cyber Quest: ภารกิจกู้ภัยเมืองดิจิทัล</h2>
+                    <p className="text-slate-300 max-w-xl mx-auto mb-8 text-sm leading-relaxed">
+                        เมืองดิจิทัลกำลังถูกไวรัสและแฮกเกอร์โจมตี! สวมบทบาทเป็นผู้พิทักษ์ไซเบอร์ ทบทวนความรู้เกี่ยวกับรหัสผ่าน การหลอกลวงออนไลน์ การป้องกันภัยคุกคาม และพิชิต Boss บอสไวรัสเพื่อช่วยเมืองนี้ให้ปลอดภัย!
+                    </p>
+
+                    <div className="flex flex-col sm:flex-row justify-center gap-4 max-w-xs mx-auto">
+                        <button 
+                            onClick={onStart} 
+                            className="w-full py-3.5 px-6 rounded-xl font-bold bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white shadow-lg shadow-cyan-500/20 transform hover:-translate-y-0.5 transition">
+                            🚀 เริ่มเกมใหม่
+                        </button>
+                        <button 
+                            onClick={onHowTo} 
+                            className="w-full py-3.5 px-6 rounded-xl font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition">
+                            📖 วิธีการเล่น
+                        </button>
+                    </div>
+                </div>
+            );
+        }
+
+        // --- 2. Screen: Register ---
+        function RegisterScreen({ player, setPlayer, onSubmit }) {
+            return (
+                <div className="glass-card p-6 md:p-8 rounded-2xl max-w-lg mx-auto w-full shadow-xl">
+                    <h2 className="text-2xl font-bold text-cyan-400 mb-1 text-center">📝 ลงทะเบียนผู้พิทักษ์ไซเบอร์</h2>
+                    <p className="text-slate-400 text-xs text-center mb-6">กรอกข้อมูลผู้เรียนเพื่อบันทึกสถิติความก้าวหน้า</p>
+
+                    <form onSubmit={onSubmit} className="space-y-4">
+                        <div>
+                            <label className="block text-xs font-medium text-slate-300 mb-1">ชื่อ - นามสกุล *</label>
+                            <input 
+                                type="text" 
+                                required
+                                value={player.name}
+                                onChange={e => setPlayer({...player, name: e.target.value})}
+                                placeholder="เช่น ด.ช.สมชาย ใจดี" 
+                                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-sm text-white focus:outline-none focus:border-cyan-500"
+                            />
+                        </div>
+
+                        <div>
+                            <label className="block text-xs font-medium text-slate-300 mb-1">รหัสนักเรียน / นักศึกษา *</label>
+                            <input 
+                                type="text" 
+                                required
+                                value={player.studentId}
+                                onChange={e => setPlayer({...player, studentId: e.target.value})}
+                                placeholder="เช่น STD-6701" 
+                                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-sm text-white focus:outline-none focus:border-cyan-500"
+                            />
+                        </div>
+
+                        <div>
+                            <label className="block text-xs font-medium text-slate-300 mb-1">ชั้นเรียน / กลุ่มเรียน *</label>
+                            <input 
+                                type="text" 
+                                required
+                                value={player.classGroup}
+                                onChange={e => setPlayer({...player, classGroup: e.target.value})}
+                                placeholder="เช่น ม.4/1 หรือ CS-101" 
+                                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-sm text-white focus:outline-none focus:border-cyan-500"
+                            />
+                        </div>
+
+                        <div>
+                            <label className="block text-xs font-medium text-slate-300 mb-1">ชื่อเล่น ( Avatar Name ) *</label>
+                            <input 
+                                type="text" 
+                                required
+                                value={player.nickname}
+                                onChange={e => setPlayer({...player, nickname: e.target.value})}
+                                placeholder="เช่น CyberHero" 
+                                className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-sm text-white focus:outline-none focus:border-cyan-500"
+                            />
+                        </div>
+
+                        <button 
+                            type="submit" 
+                            className="w-full mt-4 py-3 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 rounded-xl font-bold text-white shadow-lg shadow-cyan-500/20 transition">
+                            ถัดไป: ดูคำอธิบายกติกา ➔
+                        </button>
+                    </form>
+                </div>
+            );
+        }
+
+        // --- 3. Screen: HowTo ---
+        function HowToScreen({ onBegin, player }) {
+            return (
+                <div className="glass-card p-6 md:p-8 rounded-2xl max-w-2xl mx-auto w-full shadow-xl">
+                    <h2 className="text-2xl font-bold text-cyan-400 mb-4 text-center">🎯 กติกาและวิธีการเล่น</h2>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6 text-sm">
+                        <div className="bg-slate-900/80 p-4 rounded-xl border border-slate-800">
+                            <h3 className="font-bold text-amber-400 mb-2 flex items-center gap-2">🕹️ 4 ด่านภารกิจ</h3>
+                            <ul className="text-xs text-slate-300 space-y-1.5 list-disc list-inside">
+                                <li><strong>ด่าน 1 (ลาก-วาง):</strong> จัดหมวดหมู่ภัยคุกคามดิจิทัล</li>
+                                <li><strong>ด่าน 2 (จับคู่การ์ด):</strong> จับคู่ภัยไซเบอร์กับวิธีป้องกัน</li>
+                                <li><strong>ด่าน 3 (เลือกเส้นทาง):</strong> ตัดสินใจแก้สถานการณ์วิกฤต</li>
+                                <li><strong>ด่าน 4 (Boss Battle):</strong> ปราบ Malware King ด้วยควิซความเร็ว</li>
+                            </ul>
+                        </div>
+
+                        <div className="bg-slate-900/80 p-4 rounded-xl border border-slate-800">
+                            <h3 className="font-bold text-cyan-400 mb-2 flex items-center gap-2">🏅 เหรียญรางวัล & คะแนน</h3>
+                            <ul className="text-xs text-slate-300 space-y-1.5 list-disc list-inside">
+                                <li><strong>คะแนนเต็ม:</strong> 1,000 คะแนน</li>
+                                <li><strong>🥇 ผู้เชี่ยวชาญ:</strong> ได้รับคะแนน 85% ขึ้นไป</li>
+                                <li><strong>🥈 นักแก้ปัญหา:</strong> ได้รับคะแนน 65% - 84%</li>
+                                <li><strong>🥉 ผู้เริ่มต้น:</strong> ได้รับคะแนนน้อยกว่า 65%</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div className="bg-slate-900/80 p-4 rounded-xl border border-slate-800 mb-6 text-xs text-slate-300">
+                        <span className="font-bold text-emerald-400">💡 ระบบไอเทม & หัวใจ:</span> คุณมีหัวใจ 3 ดวงในการลุยด่าน หากตอบผิดจะเสียหัวใจ แต่คุณสามารถใช้ไอเทมช่วยเหลือ เช่น <span className="text-cyan-400 font-semibold">"Cyber Shield" (ป้องกันตอบผิด)</span> และ <span className="text-amber-400 font-semibold">"Hint คำใบ้"</span> ได้ระหว่างเล่น!
+                    </div>
+
+                    <div className="flex justify-between items-center pt-2">
+                        <div className="text-xs text-slate-400">
+                            ผู้เล่น: <span className="text-cyan-400 font-bold">{player.nickname || 'Guest'}</span>
+                        </div>
+                        <button 
+                            onClick={onBegin}
+                            className="py-3 px-8 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 rounded-xl font-bold text-white shadow-lg shadow-emerald-500/20 transition">
+                            ⚔️ พร้อมแล้ว! เข้าสู่ภารกิจ
+                        </button>
+                    </div>
+                </div>
+            );
+        }
+
+        // --- 4. Game Engine & Minigames ---
+        function GameEngine({ stage, setStage, lives, setLives, score, setScore, items, setItems, totalCorrect, setTotalCorrect, totalWrong, setTotalWrong, onComplete, feedback, setFeedback }) {
+
+            const useHintItem = () => {
+                if (items.hint <= 0) return alert('คุณไม่มีไอเทมคำใบ้เหลือแล้ว!');
+                setItems(prev => ({ ...prev, hint: prev.hint - 1 }));
+                SoundFX.play('click');
+                alert('💡 คำใบ้: สังเกตตัวเลือกที่มีเรื่องของ "ความปลอดภัย", "การยืนยันตัวตน", หรือ "การสำรองข้อมูล"');
+            };
+
+            const useShieldItem = () => {
+                if (items.shield <= 0) return alert('คุณไม่มีโล่ไซเบอร์เหลือแล้ว!');
+                setItems(prev => ({ ...prev, shield: prev.shield - 1 }));
+                SoundFX.play('click');
+                alert('🛡️ โล่ไซเบอร์ทำงาน! การตอบผิดครั้งถัดไปจะไม่เสียชีวิต');
+            };
+
+            return (
+                <div className="space-y-4">
+                    {/* Top Game Bar */}
+                    <div className="glass-card p-4 rounded-xl flex flex-wrap justify-between items-center text-sm gap-2">
+                        <div className="flex items-center gap-3">
+                            <span className="px-3 py-1 bg-cyan-500/20 text-cyan-400 rounded-full font-bold border border-cyan-500/40">
+                                ด่านที่ {stage} / 4
+                            </span>
+                            <div className="flex gap-1 text-lg">
+                                {[...Array(3)].map((_, i) => (
+                                    <span key={i}>{i < lives ? '❤️' : '🖤'}</span>
+                                ))}
+                            </div>
+                        </div>
+
+                        <div className="flex items-center gap-4">
+                            <div className="font-bold text-amber-400">คะแนน: {score}</div>
+                            <div className="flex gap-2">
+                                <button onClick={useShieldItem} className="text-xs px-2.5 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg flex items-center gap-1">
+                                    🛡️ โล่ ({items.shield})
+                                </button>
+                                <button onClick={useHintItem} className="text-xs px-2.5 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg flex items-center gap-1">
+                                    💡 ใบ้ ({items.hint})
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Stage Renderers */}
+                    {stage === 1 && (
+                        <Stage1Categorization 
+                            onPass={(pts) => {
+                                SoundFX.play('correct');
+                                setScore(s => s + pts);
+                                setTotalCorrect(c => c + 3);
+                                setStage(2);
+                            }}
+                            onMistake={() => {
+                                SoundFX.play('wrong');
+                                setLives(l => Math.max(0, l - 1));
+                                setTotalWrong(w => w + 1);
+                            }}
+                        />
+                    )}
+
+                    {stage === 2 && (
+                        <Stage2MemoryMatch 
+                            onPass={(pts) => {
+                                SoundFX.play('correct');
+                                setScore(s => s + pts);
+                                setTotalCorrect(c => c + 4);
+                                setStage(3);
+                            }}
+                            onMistake={() => {
+                                SoundFX.play('wrong');
+                                setTotalWrong(w => w + 1);
+                            }}
+                        />
+                    )}
+
+                    {stage === 3 && (
+                        <Stage3ScenarioDecision 
+                            onPass={(pts) => {
+                                SoundFX.play('correct');
+                                setScore(s => s + pts);
+                                setTotalCorrect(c => c + 3);
+                                setStage(4);
+                            }}
+                            onFail={() => {
+                                SoundFX.play('wrong');
+                                setLives(l => Math.max(0, l - 1));
+                                setTotalWrong(w => w + 1);
+                            }}
+                        />
+                    )}
+
+                    {stage === 4 && (
+                        <Stage4BossBattle 
+                            onFinish={(bossDefeated, pts, correctCount, wrongCount) => {
+                                const finalPts = score + pts;
+                                setTotalCorrect(c => c + correctCount);
+                                setTotalWrong(w => w + wrongCount);
+                                onComplete(finalPts, correctCount, wrongCount);
+                            }}
+                        />
+                    )}
+                </div>
+            );
+        }
+
+        // --- STAGE 1: Drag-and-Drop / Tap Categorization ---
+        function Stage1Categorization({ onPass, onMistake }) {
+            const initialItems = [
+                { id: 1, text: "อีเมลปลอมหลอกเอา OTP", category: "phishing" },
+                { id: 2, text: "การใช้ 2FA ยืนยันตัวตน", category: "defense" },
+                { id: 3, text: "มัลแวร์เรียกค่าไถ่ Ransomware", category: "malware" },
+                { id: 4, text: "การสำรองข้อมูลแบบ 3-2-1", category: "defense" },
+                { id: 5, text: "ลิงก์เว็บปลอมแจกรางวัล", category: "phishing" },
+                { id: 6, text: "ไวรัสแอบสปายดักจับรหัส", category: "malware" }
+            ];
+
+            const [pool, setPool] = useState(initialItems);
+            const [selectedItem, setSelectedItem] = useState(null);
+            const [placed, setPlaced] = useState({ phishing: [], defense: [], malware: [] });
+
+            const handleSelectPool = (item) => {
+                SoundFX.play('click');
+                setSelectedItem(item);
+            };
+
+            const handlePlaceCategory = (targetCat) => {
+                if (!selectedItem) return;
+                if (selectedItem.category === targetCat) {
+                    SoundFX.play('correct');
+                    setPlaced(prev => ({ ...prev, [targetCat]: [...prev[targetCat], selectedItem] }));
+                    setPool(prev => prev.filter(i => i.id !== selectedItem.id));
+                    setSelectedItem(null);
+
+                    // Check if clear
+                    if (pool.length === 1) {
+                        onPass(250);
+                    }
+                } else {
+                    SoundFX.play('wrong');
+                    onMistake();
+                    alert('❌ หมวดหมู่ไม่ถูกต้อง! ลองคิดดูใหม่อีกครั้ง');
+                }
+            };
+
+            return (
+                <div className="glass-card p-6 rounded-xl space-y-6">
+                    <div className="text-center">
+                        <h3 className="text-xl font-bold text-cyan-400">ด่านที่ 1: จัดหมวดหมู่ภัยคุกคามไซเบอร์ (Drag & Drop / Tap)</h3>
+                        <p className="text-xs text-slate-300 mt-1">คลิกเลือกข้อความจากกล่องสีเหลือง แล้วคลิกกล่องเป้าหมายที่ถูกต้องให้ครบทุกข้อ</p>
+                    </div>
+
+                    {/* Source Items */}
+                    <div className="bg-slate-900/90 p-4 rounded-xl border border-slate-800 min-h-[90px]">
+                        <div className="text-xs text-amber-400 font-semibold mb-2">📦 รายการที่ต้องจัดหมวดหมู่ (เลือกข้อความ):</div>
+                        <div className="flex flex-wrap gap-2">
+                            {pool.map(item => (
+                                <button 
+                                    key={item.id}
+                                    onClick={() => handleSelectPool(item)}
+                                    className={`px-3 py-2 text-xs font-semibold rounded-lg border transition ${
+                                        selectedItem?.id === item.id 
+                                        ? 'bg-amber-500 text-slate-950 border-amber-300 scale-105 shadow-lg' 
+                                        : 'bg-slate-800 text-slate-200 border-slate-700 hover:border-cyan-500'
+                                    }`}>
+                                    {item.text}
+                                </button>
+                            ))}
+                            {pool.length === 0 && <span className="text-xs text-emerald-400 font-bold">✨ ยอดเยี่ยม! จัดหมวดหมู่ครบถ้วนแล้ว</span>}
+                        </div>
+                    </div>
+
+                    {/* Target Bins */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        {/* Bin 1 */}
+                        <div 
+                            onClick={() => handlePlaceCategory('phishing')}
+                            className="bg-red-950/30 border-2 border-dashed border-red-500/40 hover:border-red-400 p-4 rounded-xl min-h-[140px] cursor-pointer transition">
+                            <h4 className="text-sm font-bold text-red-400 mb-2 text-center">🎣 Phishing (การล่อลวง)</h4>
+                            <div className="space-y-1.5">
+                                {placed.phishing.map(i => (
+                                    <div key={i.id} className="text-xs bg-red-900/40 text-red-200 p-2 rounded border border-red-800/50">
+                                        ✓ {i.text}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        {/* Bin 2 */}
+                        <div 
+                            onClick={() => handlePlaceCategory('defense')}
+                            className="bg-emerald-950/30 border-2 border-dashed border-emerald-500/40 hover:border-emerald-400 p-4 rounded-xl min-h-[140px] cursor-pointer transition">
+                            <h4 className="text-sm font-bold text-emerald-400 mb-2 text-center">🛡️ Cyber Defense (การป้องกัน)</h4>
+                            <div className="space-y-1.5">
+                                {placed.defense.map(i => (
+                                    <div key={i.id} className="text-xs bg-emerald-900/40 text-emerald-200 p-2 rounded border border-emerald-800/50">
+                                        ✓ {i.text}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        {/* Bin 3 */}
+                        <div 
+                            onClick={() => handlePlaceCategory('malware')}
+                            className="bg-purple-950/30 border-2 border-dashed border-purple-500/40 hover:border-purple-400 p-4 rounded-xl min-h-[140px] cursor-pointer transition">
+                            <h4 className="text-sm font-bold text-purple-400 mb-2 text-center">👾 Malware (โปรแกรมประสงค์ร้าย)</h4>
+                            <div className="space-y-1.5">
+                                {placed.malware.map(i => (
+                                    <div key={i.id} className="text-xs bg-purple-900/40 text-purple-200 p-2 rounded border border-purple-800/50">
+                                        ✓ {i.text}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // --- STAGE 2: Memory Card Match ---
+        function Stage2MemoryMatch({ onPass, onMistake }) {
+            const rawCards = [
+                { pairId: 1, text: "🔓 รหัสผ่านเดาง่าย", type: "threat" },
+                { pairId: 1, text: "🔑 ตั้งรหัสผ่านผสม 12+ ตัวอักษร", type: "solution" },
+                { pairId: 2, text: "🌐 WiFi สาธารณะไม่มีรหัส", type: "threat" },
+                { pairId: 2, text: "🔒 เปิดใช้งาน VPN เพื่อเข้ารหัส", type: "solution" },
+                { pairId: 3, text: "💻 ฮาร์ดดิสก์โดนไวรัสลบ", type: "threat" },
+                { pairId: 3, text: "☁️ สำรองข้อมูลบน Cloud & External", type: "solution" },
+                { pairId: 4, text: "📩 แอบอ้างเป็นธนาคารขอรหัส", type: "threat" },
+                { pairId: 4, text: "🚫 ตรวจสอบ URL & ไม่เปิดเผยข้อมูล", type: "solution" }
+            ];
+
+            const [cards, setCards] = useState([]);
+            const [flippedIndex, setFlippedIndex] = useState([]);
+            const [matchedPairs, setMatchedPairs] = useState([]);
+
+            useEffect(() => {
+                // Shuffle cards on mount
+                const shuffled = [...rawCards].sort(() => Math.random() - 0.5);
+                setCards(shuffled);
+            }, []);
+
+            const handleCardClick = (idx) => {
+                if (flippedIndex.length === 2 || flippedIndex.includes(idx) || matchedPairs.includes(cards[idx].pairId)) return;
+                SoundFX.play('click');
+                const nextFlipped = [...flippedIndex, idx];
+                setFlippedIndex(nextFlipped);
+
+                if (nextFlipped.length === 2) {
+                    const [firstIdx, secondIdx] = nextFlipped;
+                    if (cards[firstIdx].pairId === cards[secondIdx].pairId) {
+                        // Match!
+                        SoundFX.play('correct');
+                        setMatchedPairs(prev => {
+                            const newMatched = [...prev, cards[firstIdx].pairId];
+                            if (newMatched.length === 4) {
+                                setTimeout(() => onPass(250), 600);
+                            }
+                            return newMatched;
+                        });
+                        setFlippedIndex([]);
+                    } else {
+                        // Wrong
+                        SoundFX.play('wrong');
+                        onMistake();
+                        setTimeout(() => setFlippedIndex([]), 1000);
+                    }
+                }
+            };
+
+            return (
+                <div className="glass-card p-6 rounded-xl space-y-4">
+                    <div className="text-center">
+                        <h3 className="text-xl font-bold text-cyan-400">ด่านที่ 2: จับคู่ความเสี่ยงและวิธีแก้ไข (Memory Match)</h3>
+                        <p className="text-xs text-slate-300 mt-1">พลิกการ์ดเพื่อจับคู่ "ภัยคุกคาม" กับ "แนวทางป้องกัน" ให้ตรงกัน</p>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 max-w-2xl mx-auto">
+                        {cards.map((card, idx) => {
+                            const isFlipped = flippedIndex.includes(idx) || matchedPairs.includes(card.pairId);
+                            const isMatched = matchedPairs.includes(card.pairId);
+
+                            return (
+                                <div 
+                                    key={idx}
+                                    onClick={() => handleCardClick(idx)}
+                                    className={`h-28 rounded-xl p-3 flex items-center justify-center text-center cursor-pointer font-bold text-xs border transition transform active:scale-95 ${
+                                        isMatched 
+                                        ? 'bg-emerald-950/60 border-emerald-500 text-emerald-300'
+                                        : isFlipped 
+                                        ? 'bg-cyan-950 border-cyan-400 text-cyan-200' 
+                                        : 'bg-slate-900 hover:bg-slate-800 border-slate-700 text-slate-500'
+                                    }`}>
+                                    {isFlipped ? card.text : "❓ พลิกการ์ด"}
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            );
+        }
+
+        // --- STAGE 3: Scenario Decision Tree ---
+        function Stage3ScenarioDecision({ onPass, onFail }) {
+            const scenarios = [
+                {
+                    title: "สถานการณ์ที่ 1: อีเมลน่าสงสัย",
+                    desc: "คุณได้รับอีเมลจาก 'ฝ่ายสนับสนุนธนาคาร' แจ้งว่าบัญชีของคุณถูกระงับ ให้รีบคลิกลิงก์ภายใน 10 นาทีเพื่อยืนยันตัวตน คุณจะทำอย่างไร?",
+                    choices: [
+                        { text: "รีบคลิกลิงก์ทันทีเพราะกลัวถูกระงับบัญชีจริง", correct: false, reason: "ผิด! ธนาคารจริงไม่มีนโยบายส่งลิงก์เร่งด่วนเพื่อขอรหัสผ่าน" },
+                        { text: "ตรวจสอบที่อยู่อีเมลผู้ส่ง และโทรสอบถาม Call Center ของธนาคารโดยตรง", correct: true, reason: "ถูกต้อง! เป็นการยืนยันข้อมูลจากช่องทางเป็นทางการ" },
+                        { text: "ส่งต่ออีเมลนี้ให้เพื่อนทุกคนช่วยกันดู", correct: false, reason: "ผิด! การส่งต่ออาจทำให้ผู้อื่นหลงเชื่อและคลิกลิงก์อันตราย" }
+                    ]
+                },
+                {
+                    title: "สถานการณ์ที่ 2: เผลอดาวน์โหลดไฟล์ปริศนา",
+                    desc: "เพื่อนส่งไฟล์ชื่อ 'Homework_Solution.exe' มาให้ทางแชทกลุ่ม คุณควรดำเนินการอย่างไร?",
+                    choices: [
+                        { text: "กดดับเบิลคลิกเปิดไฟล์ทันที", correct: false, reason: "ผิด! ไฟล์ตระกูล .exe เสี่ยงเป็นมัลแวร์ ไม่ควรรันไฟล์สคริปต์ที่ไม่แน่ใจ" },
+                        { text: "สแกนไฟล์ด้วย Antivirus และตรวจสอบนามสกุลไฟล์ว่าตรงกับงานหรือไม่", correct: true, reason: "ถูกต้อง! ควรตรวจสอบมัลแวร์ก่อนเปิดใช้งานเสมอ" },
+                        { text: "ปิดเครื่องคอมพิวเตอร์และไม่ใช้คอมอีกเลย", correct: false, reason: "เกินความจำเป็น! ควรตรวจสอบและลบไฟล์อย่างถูกวิธี" }
+                    ]
+                }
+            ];
+
+            const [step, setStep] = useState(0);
+
+            const handleChoice = (choice) => {
+                if (choice.correct) {
+                    SoundFX.play('correct');
+                    alert(`✅ ${choice.reason}`);
+                    if (step + 1 < scenarios.length) {
+                        setStep(step + 1);
+                    } else {
+                        onPass(250);
+                    }
+                } else {
+                    SoundFX.play('wrong');
+                    alert(`❌ ${choice.reason}`);
+                    onFail();
+                }
+            };
+
+            const current = scenarios[step];
+
+            return (
+                <div className="glass-card p-6 rounded-xl space-y-4">
+                    <div className="text-center">
+                        <h3 className="text-xl font-bold text-cyan-400">ด่านที่ 3: สถานการณ์วิกฤตไซเบอร์ (Scenario Decision)</h3>
+                        <p className="text-xs text-slate-300 mt-1">วิเคราะห์สถานการณ์และเลือกการตัดสินใจที่ปลอดภัยที่สุด</p>
+                    </div>
+
+                    <div className="bg-slate-900/90 p-5 rounded-xl border border-slate-800 space-y-3">
+                        <span className="text-xs px-2.5 py-1 bg-amber-500/20 text-amber-400 rounded border border-amber-500/30 font-bold">
+                            {current.title}
+                        </span>
+                        <p className="text-sm font-medium text-slate-200 leading-relaxed">{current.desc}</p>
+
+                        <div className="space-y-2 pt-2">
+                            {current.choices.map((choice, idx) => (
+                                <button
+                                    key={idx}
+                                    onClick={() => handleChoice(choice)}
+                                    className="w-full text-left p-3 text-xs md:text-sm bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg border border-slate-700 hover:border-cyan-500 transition">
+                                    {idx + 1}. {choice.text}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // --- STAGE 4: Speed Quiz Boss Battle ---
+        function Stage4BossBattle({ onFinish }) {
+            const bossQuestions = [
+                { q: "การเข้ารหัสข้อมูล (Encryption) มีประโยชน์หลักอย่างไร?", options: ["ทำให้เน็ตเร็วขึ้น", "ป้องกันการแอบอ่านข้อมูลระหว่างทาง", "ช่วยประหยัดแบตเตอรี่"], ans: 1 },
+                { q: "การตั้งรหัสผ่านแบบใดปลอดภัยที่สุด?", options: ["12345678", "Password2026", "P@ssw0rd#2026!Sec"], ans: 2 },
+                { q: "การรับรองความถูกต้องแบบ 2 ปัจจัย (2FA) คืออะไร?", options: ["การยืนยันรหัส 2 รอบ", "ใช้รหัสผ่านร่วมกับรหัส OTP/Biometrics", "สมัครสมาชิก 2 บัญชี"], ans: 1 },
+                { q: "คำว่า 'Social Engineering' หมายถึงสิ่งใด?", options: ["การวิศวกรรมคอมพิวเตอร์", "การจิตวิทยาหลอกลวงมนุษย์เพื่อเอาข้อมูล", "การทำโซเชียลมีเดีย"], ans: 1 },
+                { q: "เมื่อพบว่าเครื่องติด Ransomware ควรทำสิ่งใดเป็นอันดับแรก?", options: ["ตัดการเชื่อมต่อเครือข่าย/WiFi ทันที", "จ่ายเงินค่าไถ่ทันที", "เปิดเพลงฟังสบายๆ"], ans: 0 }
+            ];
+
+            const [bossHp, setBossHp] = useState(100);
+            const [qIndex, setQIndex] = useState(0);
+            const [timer, setTimer] = useState(12);
+            const [correctCount, setCorrectCount] = useState(0);
+            const [wrongCount, setWrongCount] = useState(0);
+
+            useEffect(() => {
+                if (timer <= 0) {
+                    // Time up -> count as wrong
+                    SoundFX.play('wrong');
+                    setWrongCount(w => w + 1);
+                    nextQuestion();
+                    return;
+                }
+                const interval = setInterval(() => setTimer(t => t - 1), 1000);
+                return () => clearInterval(interval);
+            }, [timer]);
+
+            const handleAnswer = (selectedIdx) => {
+                const isRight = selectedIdx === bossQuestions[qIndex].ans;
+                if (isRight) {
+                    SoundFX.play('correct');
+                    setBossHp(hp => Math.max(0, hp - 20));
+                    setCorrectCount(c => c + 1);
+                } else {
+                    SoundFX.play('wrong');
+                    setWrongCount(w => w + 1);
+                }
+                nextQuestion();
+            };
+
+            const nextQuestion = () => {
+                if (qIndex + 1 < bossQuestions.length) {
+                    setQIndex(qIndex + 1);
+                    setTimer(12);
+                } else {
+                    onFinish(bossHp <= 20, 250, correctCount, wrongCount);
+                }
+            };
+
+            const currQ = bossQuestions[qIndex];
+
+            return (
+                <div className="glass-card p-6 rounded-xl space-y-6">
+                    {/* Boss Health Bar */}
+                    <div className="bg-slate-900 p-4 rounded-xl border border-red-500/30 text-center space-y-2">
+                        <div className="flex justify-between items-center text-xs font-bold">
+                            <span className="text-red-400">👿 BOSS: Malware King</span>
+                            <span className="text-amber-400">⏱️ เหลือเวลาตอบ: {timer}s</span>
+                            <span className="text-slate-300">HP: {bossHp} / 100</span>
+                        </div>
+                        <div className="w-full bg-slate-800 rounded-full h-4 overflow-hidden border border-slate-700">
+                            <div 
+                                className="bg-gradient-to-r from-red-600 to-amber-500 h-full transition-all duration-500" 
+                                style={{ width: `${bossHp}%` }}>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Question Box */}
+                    <div className="bg-slate-900/90 p-5 rounded-xl border border-slate-800 space-y-4">
+                        <div className="text-xs text-cyan-400 font-bold">คำถามปราบ บอส ข้อที่ {qIndex + 1} / {bossQuestions.length}:</div>
+                        <h4 className="text-sm font-bold text-white">{currQ.q}</h4>
+
+                        <div className="grid grid-cols-1 gap-2 pt-2">
+                            {currQ.options.map((opt, idx) => (
+                                <button
+                                    key={idx}
+                                    onClick={() => handleAnswer(idx)}
+                                    className="p-3 text-left text-xs md:text-sm bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-cyan-500 rounded-lg text-slate-200 transition">
+                                    {idx + 1}. {opt}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // --- 5. Screen: Summary ---
+        function SummaryScreen({ player, score, lives, startTime, endTime, totalCorrect, totalWrong, onRestart, onDashboard }) {
+            const elapsed = Math.round(((endTime || Date.now()) - (startTime || Date.now())) / 1000);
+            const percent = Math.min(100, Math.round((score / 1000) * 100));
+
+            let medalName = "🥉 เหรียญผู้เริ่มต้นไซเบอร์";
+            let rankText = "ระดับพื้นฐาน: ควรทบทวนเรื่องการตั้งรหัสผ่านและการระวังภัย Phishing";
+            if (percent >= 85) {
+                medalName = "🥇 เหรียญผู้เชี่ยวชาญไซเบอร์";
+                rankText = "ยอดเยี่ยมระดับสูง! คุณมีความรู้ความเข้าใจในความปลอดภัยไซเบอร์ยอดเยี่ยมพร้อมลุยโลกจริง";
+            } else if (percent >= 65) {
+                medalName = "🥈 เหรียญนักแก้ปัญหาไซเบอร์";
+                rankText = "เก่งมาก! คุณมีทักษะในการแก้ปัญหาไซเบอร์ได้ดี ควรฝึกฝนการวิเคราะห์สถานการณ์ซับซ้อนเพิ่มขึ้น";
+            }
+
+            return (
+                <div className="glass-card p-6 md:p-8 rounded-2xl max-w-xl mx-auto w-full shadow-2xl text-center space-y-6">
+                    <div>
+                        <span className="text-5xl">{lives > 0 ? "🏆" : "💀"}</span>
+                        <h2 className="text-2xl font-extrabold text-cyan-400 mt-2">
+                            {lives > 0 ? "ภารกิจสำเร็จ! สรุปผลการเรียนรู้" : "จบการเล่น (Game Over)"}
+                        </h2>
+                        <p className="text-xs text-slate-400">ผู้เล่น: {player.name} ({player.nickname}) - {player.classGroup}</p>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
+                        <div className="bg-slate-900 p-3 rounded-xl border border-slate-800">
+                            <div className="text-xs text-slate-400">คะแนนรวม</div>
+                            <div className="text-xl font-bold text-amber-400">{score} / 1000</div>
+                        </div>
+                        <div className="bg-slate-900 p-3 rounded-xl border border-slate-800">
+                            <div className="text-xs text-slate-400">คิดเป็นร้อยละ</div>
+                            <div className="text-xl font-bold text-cyan-400">{percent}%</div>
+                        </div>
+                        <div className="bg-slate-900 p-3 rounded-xl border border-slate-800">
+                            <div className="text-xs text-slate-400">ตอบ ถูก / ผิด</div>
+                            <div className="text-sm font-bold text-emerald-400 mt-1">{totalCorrect} ข้อ / {totalWrong} ข้อ</div>
+                        </div>
+                        <div className="bg-slate-900 p-3 rounded-xl border border-slate-800">
+                            <div className="text-xs text-slate-400">เวลาที่ใช้</div>
+                            <div className="text-sm font-bold text-slate-200 mt-1">{elapsed} วินาที</div>
+                        </div>
+                    </div>
+
+                    <div className="bg-slate-900/90 p-4 rounded-xl border border-cyan-500/30 text-left space-y-2">
+                        <div className="text-xs font-bold text-cyan-400 flex items-center gap-2">
+                            🏅 รางวัลที่ได้รับ: <span className="text-amber-300 font-extrabold text-sm">{medalName}</span>
+                        </div>
+                        <p className="text-xs text-slate-300 leading-relaxed">{rankText}</p>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row gap-3 pt-2">
+                        <button 
+                            onClick={onRestart}
+                            className="flex-1 py-3 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 rounded-xl font-bold text-white shadow-lg transition">
+                            🔄 เล่นใหม่อีกครั้ง
+                        </button>
+                        <button 
+                            onClick={onDashboard}
+                            className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl font-bold text-slate-200 transition">
+                            📊 ดู Dashboard สรุป
+                        </button>
+                    </div>
+                </div>
+            );
+        }
+
+        // --- 6. Screen: Dashboard & Analytics ---
+        function DashboardScreen({ records, onBack }) {
+            const downloadCSV = () => {
+                let csv = "ID,Name,Class,Nickname,Score,Percent,Correct,Wrong,TimeSec,Medal,Status,Date\n";
+                records.forEach(r => {
+                    csv += `"${r.id}","${r.name}","${r.room}","${r.nickname}",${r.score},${r.percent},${r.correct},${r.wrong},${r.timeSec},"${r.medal}","${r.status}","${r.date}"\n`;
+                });
+                const blob = new Blob(["\uFEFF" + csv], { type: 'text/csv;charset=utf-8;' });
+                const link = document.createElement("a");
+                link.href = URL.createObjectURL(blob);
+                link.setAttribute("download", "cyber_quest_student_scores.csv");
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            };
+
+            const avgScore = records.length ? Math.round(records.reduce((acc, r) => acc + r.score, 0) / records.length) : 0;
+            const maxScore = records.length ? Math.max(...records.map(r => r.score)) : 0;
+
+            return (
+                <div className="glass-card p-6 rounded-2xl space-y-6">
+                    <div className="flex flex-wrap justify-between items-center gap-4 border-b border-slate-800 pb-4">
+                        <div>
+                            <h2 className="text-2xl font-bold text-cyan-400">📊 Teacher & Student Analytics Dashboard</h2>
+                            <p className="text-xs text-slate-400">ระบบบันทึกผลและสรุปความก้าวหน้าของผู้เรียนทั้งหมด</p>
+                        </div>
+                        <div className="flex gap-2">
+                            <button onClick={downloadCSV} className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold transition">
+                                📥 ส่งออก CSV (Excel)
+                            </button>
+                            <button onClick={onBack} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-semibold transition">
+                                🔙 กลับหน้าหลัก
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Stats Overview Cards */}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                        <div className="bg-slate-900 p-4 rounded-xl border border-slate-800">
+                            <div className="text-xs text-slate-400">ผู้เรียนทั้งหมด</div>
+                            <div className="text-2xl font-bold text-white mt-1">{records.length} คน</div>
+                        </div>
+                        <div className="bg-slate-900 p-4 rounded-xl border border-slate-800">
+                            <div className="text-xs text-slate-400">คะแนนเฉลี่ย</div>
+                            <div className="text-2xl font-bold text-cyan-400 mt-1">{avgScore} / 1000</div>
+                        </div>
+                        <div className="bg-slate-900 p-4 rounded-xl border border-slate-800">
+                            <div className="text-xs text-slate-400">คะแนนสูงสุด</div>
+                            <div className="text-2xl font-bold text-amber-400 mt-1">{maxScore} / 1000</div>
+                        </div>
+                    </div>
+
+                    {/* Table Records */}
+                    <div className="overflow-x-auto rounded-xl border border-slate-800">
+                        <table className="w-full text-left text-xs">
+                            <thead className="bg-slate-900 text-slate-300 font-bold border-b border-slate-800">
+                                <tr>
+                                    <th className="p-3">ผู้เล่น (Avatar)</th>
+                                    <th className="p-3">ชื่อ-นามสกุล / รหัส</th>
+                                    <th className="p-3">ชั้นเรียน</th>
+                                    <th className="p-3 text-center">คะแนน (%)</th>
+                                    <th className="p-3 text-center">เวลาที่ใช้</th>
+                                    <th className="p-3">เหรียญรางวัล</th>
+                                    <th className="p-3 text-center">วันที่</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-800/60 text-slate-300">
+                                {records.map((r, idx) => (
+                                    <tr key={idx} className="hover:bg-slate-900/50">
+                                        <td className="p-3 font-bold text-cyan-400">{r.nickname}</td>
+                                        <td className="p-3">{r.name} <span className="text-slate-500">({r.id})</span></td>
+                                        <td className="p-3">{r.room}</td>
+                                        <td className="p-3 text-center font-bold text-amber-400">{r.score} ({r.percent}%)</td>
+                                        <td className="p-3 text-center">{r.timeSec}s</td>
+                                        <td className="p-3">{r.medal}</td>
+                                        <td className="p-3 text-center text-slate-500">{r.date}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            );
+        }
+
+        // Render App
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<CyberQuestApp />);
+    </script>
+</body>
+</html>
